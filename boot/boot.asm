@@ -29,6 +29,10 @@ BPB:
 .system_identifier: db "FAT12   "
 
 ROOT_DIR_ENTRY_SIZE equ 32
+DOS_FILE_NAME_OFFSET equ 0
+DOS_FILE_EXTENSION_OFFSET equ 0x8
+FILE_ATTRIBUTES_OFFSET equ 0xb
+FIRST_CLUSTER_OFFSET equ 0x1a
 
 start:
     mov byte [BPB.drive_number], dl
@@ -52,7 +56,7 @@ start:
     mov ax, [BPB.reserved_sectors]
     mov word [FAT12_INFO.fat_location], ax ;LBA address for FAT(1 in this case)
 
-calculate_root_dir_start: ; number_of_fats * (sectors_per_fat * bytes_per_sector) + reserved_sectors
+calculate_root_dir_start: ; number_of_fats * sectors_per_fat + reserved_sectors
     mov ax, [BPB.sectors_per_fat]
     mov bl, byte [BPB.fat_count]
     mul bx
@@ -70,53 +74,16 @@ calculate_root_dir_size: ; (root_dir_entries * root_dir_entry_size) / bytes_per_
     mov word [FAT12_INFO.root_dir_size], ax
 
 calculate_fat_data_start:
-    mov bx, [FAT12_INFO.root_dir_location]
-    add bx, [BPB.root_dir_entries]
-    mov ax, 32
-    mul bx
-    add ax, [BPB.bytes_per_sector]
-    sub ax, 1
-    mov word [FAT12_INFO.data_location], ax ;Address of first data sector: FAT12_INFO.root_dir_location + BPB.root_dir_entries * 32 + BPB.bytes_per_sector - 1 
+    mov ax, [FAT12_INFO.root_dir_location]
+    add ax, [FAT12_INFO.root_dir_size]
 
+    mov word [FAT12_INFO.data_location], ax ; (root_dir_location + root_dir_size)
 load_kernel:
 .load_root_dir:
-    xor dx, dx
-    mov ax, [BPB.heads]
-    mov bx, [BPB.sectors_per_track]
-    mul bx
-    xor dx, dx
-    mov bx, ax
-    mov ax, [FAT12_INFO.root_dir_location]
-    div bx ; Calculating the cylinder(LBA divided by (heads per cylinder times sectors per track))
-    
-    mov ch, al
-
-    xor dx, dx
-    mov ax, [FAT12_INFO.root_dir_location]
-    mov bx, [BPB.sectors_per_track]
-    div bx
-    xor dx, dx
-    mov bx, [BPB.heads]
-    div bx ;Calculating the head((LBA divided by secotrs per track) modulo heads)
-    
-    mov cl, dl
-
-    xor dx, dx
-    mov ax, [FAT12_INFO.root_dir_location]
-    div word [BPB.sectors_per_track]
-    add dl, 1
-
-    mov dh, cl
-    mov cl, dl
-
-    mov dl, [BPB.drive_number]
-    mov ah, 2
-    mov al, 1
+    mov di, [FAT12_INFO.root_dir_location]
+    mov ax, [FAT12_INFO.root_dir_size]
     mov bx, 0x7e00
-
-    int 0x13
-
-    jc error
+    call load_sector
 
     mov bx, 0x7e00 - ROOT_DIR_ENTRY_SIZE
 
@@ -138,28 +105,67 @@ load_kernel:
     jmp .str_loop ; Compare the entry name in the root directory with the kernels file name
 
 .end:
-    jmp $
+    mov [kernel_file_loc], bx
 
-string: db "error", 0
-string2: db "success", 0
+    mov cx, 0
+    add bx, [BPB.bytes_per_sector] ; Load the fat right after the first sector of the loaded root directory(0x8000) for later reference
+    mov ax, [BPB.sectors_per_fat]
+    mov di, [BPB.reserved_sectors]
+    call load_sector
 
-error:
-    mov bx, string
+.load_kernel_clusters: ; Kernel will be loaded at address starting from 0x600
+    mov ax, [kernel_file_loc]
+    jmp $ ;TODO: read fat
+
+
+load_sector: ; LBA stored in DI, Destination stored in BX, Sector read count stored in AX
+    push bx
+    push ax
+    xor dx, dx
+    mov ax, [BPB.heads]
+    mov bx, [BPB.sectors_per_track]
+    mul bx
+    xor dx, dx
+    mov bx, ax
+    mov ax, di
+    div bx ; Calculating the cylinder(LBA divided by (heads per cylinder times sectors per track))
+    
+    mov ch, al
+
+    xor dx, dx
+    mov ax, di
+    mov bx, [BPB.sectors_per_track]
+    div bx
+    xor dx, dx
+    mov bx, [BPB.heads]
+    div bx ;Calculating the head((LBA divided by secotrs per track) modulo heads)
+    
+    mov cl, dl
+
+    xor dx, dx
+    mov ax, di
+    div word [BPB.sectors_per_track]
+    add dl, 1
+
+    mov dh, cl
+    mov cl, dl
+
+    mov dl, [BPB.drive_number]
+    mov ah, 2
+    pop ax
+    pop bx
+    mov ah, 2
+
+    int 0x13
+
+    jc .error
+    ret 
+.error:
+    mov bx, error_string
     call print_string
     jmp $
-
-lba_to_chs: ; AX = LBA position, returns cylinder in CH, Sector in CL, Head in DH
-    xor dx, dx
-    div word [BPB.sectors_per_track]
-    mov cl, dl
-    inc cl ; Divide the LBA by the sectors per track to get the track number in al and the sector as a remainder in dl and increment by one because sector counting starts not at 0, but at 1
-
-    xor dx, dx
-    div word [BPB.heads]
-    mov ch, al
-    mov dh, dl ; Divide the track number by the heads present on the device to get the current head as a remainder and the track on that side of the disk as a result
-
-    ret
+error_string: db "error", 0
+debug_string: db "debug", 0
 
 print_string:
     pusha
@@ -181,6 +187,7 @@ print_string:
 
 kernel_file: db "KERNEL  BIN"
 kernel_file_len: db $ - kernel_file
+kernel_file_loc: dw 0
 
 DiskAddressPacket:
 .size: db 0x10
