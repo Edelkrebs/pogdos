@@ -100,11 +100,11 @@ load_kernel:
     cmp al, byte [kernel_file + di]    
     jne .find_kernel_entry
     cmp di, 10
-    je .end
+    je .end_find_kernel
     inc di
     jmp .str_loop ; Compare the entry name in the root directory with the kernels file name
 
-.end:
+.end_find_kernel:
     mov [kernel_file_loc], bx
 
     mov cx, 0
@@ -114,9 +114,65 @@ load_kernel:
     call load_sector
 
 .load_kernel_clusters: ; Kernel will be loaded at address starting from 0x600
-    mov ax, [kernel_file_loc]
-    jmp $ ;TODO: read fat
+    mov bx, [kernel_file_loc]
+    add bx, FIRST_CLUSTER_OFFSET
+    mov ax, [bx] ; Load ax with the first cluster in the FAT of the kernel file 
 
+    mov bx, 0x600 - 0x200
+    mov ax, 0x0
+.find_next_cluster: ; Starting FAT cluster in ax
+    add bx, 0x200
+    push bx
+    xor dx, dx
+    mov si, ax ; Save the next cluster in case it is the last one
+    mov cl, 12
+    mul cl
+    mov cx, 0x8
+    div cx ; calculate bytes by doing First_cluster * 12 (calculate the nibble) / 16
+    ;add ax, 1
+
+    mov bx, 0x8000
+    add bx, ax
+    mov cx, [bx]
+    cmp dx, 0
+    je .skip_shift
+    shr cx, 4
+.skip_shift:
+    ; Get the cluster sector address, 
+    jmp $ ; TODO: try to get the 3 bytes containing the next cluster and the following/previous in one 16 bit register and one 8 bit register
+.check_cluster:
+    mov ax, cx
+
+    cmp cx, 0x2
+    jc load_sector.error ; or if the cluster is reserved or free, there was something wrong happening,
+
+    cmp cx, 0xFF8
+    jnc .last_cluster ; or it was the last cluster in the file, in which case, we can stop reading this file,
+
+    cmp cx, 0xFF0
+    jg load_sector.error ; or the cluster was bad or reserved
+
+    jmp $
+
+    pop bx
+    mov di, [FAT12_INFO.data_location]
+    add di, si
+    sub di, 2
+    mov ax, 1
+    push bx
+    jmp .find_next_cluster
+
+.last_cluster:
+    call debug
+    pop bx
+    mov di, [FAT12_INFO.data_location]
+    add di, si
+    sub di, 2
+    mov ax, 1
+    call load_sector
+.end_cluster_read:
+    jmp $ ;TODO: read fat
+    jmp $
 
 load_sector: ; LBA stored in DI, Destination stored in BX, Sector read count stored in AX
     push bx
@@ -184,6 +240,11 @@ print_string:
 .end:
     popa
     ret
+
+debug:
+    mov bx, debug_string
+    call print_string
+    jmp $
 
 kernel_file: db "KERNEL  BIN"
 kernel_file_len: db $ - kernel_file
