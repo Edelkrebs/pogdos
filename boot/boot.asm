@@ -117,50 +117,41 @@ load_kernel:
     mov bx, [kernel_file_loc]
     add bx, FIRST_CLUSTER_OFFSET
     mov ax, [bx] ; Load ax with the first cluster in the FAT of the kernel file 
+    jmp $
 
     mov bx, 0x600 - 0x200
-    mov ax, 0x0
+    mov ax, 0x3
 .find_next_cluster: ; Starting FAT cluster in ax
     add bx, 0x200
     push bx
-    xor dx, dx
-    mov si, ax ; Save the next cluster in case it is the last one
-    mov cl, 12
+    mov si, ax
+    mov cx, 2
+    div cx
+
+    mov cl, 3
     mul cl
-    mov cx, 0x8
-    div cx ; calculate bytes by doing First_cluster * 12 (calculate the nibble) / 16
-    ;add ax, 1
 
     mov bx, 0x8000
     add bx, ax
-    mov cx, [bx]
     cmp dx, 0
-    je .skip_shift
-    shr cx, 4
-.skip_shift:
-    ; Get the cluster sector address, 
-    jmp $ ; TODO: try to get the 3 bytes containing the next cluster and the following/previous in one 16 bit register and one 8 bit register
-.check_cluster:
-    mov ax, cx
-
-    cmp cx, 0x2
-    jc load_sector.error ; or if the cluster is reserved or free, there was something wrong happening,
-
-    cmp cx, 0xFF8
-    jnc .last_cluster ; or it was the last cluster in the file, in which case, we can stop reading this file,
-
-    cmp cx, 0xFF0
-    jg load_sector.error ; or the cluster was bad or reserved
+    jne .uneven_cluster
+    
+    mov ah, [bx + 2]
+    shr ax, 4
+    xor cx, cx
+    mov cl, [bx + 1]
+    shr cl, 0x4
+    or ax, cx
 
     jmp $
 
-    pop bx
-    mov di, [FAT12_INFO.data_location]
-    add di, si
-    sub di, 2
-    mov ax, 1
-    push bx
-    jmp .find_next_cluster
+.uneven_cluster:
+
+    mov al, [bx]
+    mov ah, [bx + 1]
+    and ah, 0xF
+    ;call debug
+    jmp $
 
 .last_cluster:
     call debug

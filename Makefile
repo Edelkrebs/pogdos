@@ -16,6 +16,7 @@ $(TARGET): clean $(OBJ)
 	mkdir mountdir
 	sudo mount -o loop -t msdos $(TARGET) mountdir
 	sudo cp kernel/kernel.o mountdir/kernel.bin
+	sleep 0.3
 	sudo umount mountdir
 	rmdir mountdir
 
