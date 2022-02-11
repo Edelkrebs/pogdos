@@ -33,6 +33,7 @@ DOS_FILE_NAME_OFFSET equ 0
 DOS_FILE_EXTENSION_OFFSET equ 0x8
 FILE_ATTRIBUTES_OFFSET equ 0xb
 FIRST_CLUSTER_OFFSET equ 0x1a
+KERNEL_MEMORY_LOCATION equ 0x600
 
 start:
     mov byte [BPB.drive_number], dl
@@ -117,14 +118,11 @@ load_kernel:
     mov bx, [kernel_file_loc]
     add bx, FIRST_CLUSTER_OFFSET
     mov ax, [bx] ; Load ax with the first cluster in the FAT of the kernel file 
-    jmp $
 
-    mov bx, 0x600 - 0x200
-    mov ax, 0x3
+    mov bx, KERNEL_MEMORY_LOCATION - 0x200
 .find_next_cluster: ; Starting FAT cluster in ax
-    add bx, 0x200
     push bx
-    mov si, ax
+    mov si, ax ; Store the current cluster value in si for later
     mov cx, 2
     div cx
 
@@ -132,38 +130,45 @@ load_kernel:
     mul cl
 
     mov bx, 0x8000
-    add bx, ax
+    add bx, ax ; Get the next cluster number by doing current_cluster_in_ax / 2 * 3
     cmp dx, 0
     jne .uneven_cluster
-    
-    mov ah, [bx + 2]
-    shr ax, 4
-    xor cx, cx
-    mov cl, [bx + 1]
-    shr cl, 0x4
-    or ax, cx
 
-    jmp $
+    mov ax, [bx]
+    and ax, 0xFFF
+
+    jmp .check_cluster
 
 .uneven_cluster:
-
-    mov al, [bx]
-    mov ah, [bx + 1]
-    and ah, 0xF
-    ;call debug
-    jmp $
-
-.last_cluster:
-    call debug
+    mov ax, [bx + 1]
+    ror ah, 0x4
+    shr ax, 0x4
+    
+.check_cluster:
     pop bx
-    mov di, [FAT12_INFO.data_location]
-    add di, si
-    sub di, 2
+    add bx, 0x200 ; Get the correct destination address for the current kernel sector by popping the previously saved bx value off the stack
+
+    pusha ; Save all the registers so they wont get lost during disk access
+    mov di, si
+    add di, [FAT12_INFO.data_location]
+    sub di, 2 ; Calculate the sector from the cluster by doing first_data_sector - 2(because data clusters start at 3) + current_cluster
     mov ax, 1
     call load_sector
-.end_cluster_read:
-    jmp $ ;TODO: read fat
-    jmp $
+    popa
+
+    cmp ax, 0xFFF
+    je .end_kernel_read
+
+    cmp ax, 0xFF0
+    jg load_sector.error
+
+    cmp ax, 0x2
+    jl load_sector.error
+
+    jmp .find_next_cluster
+
+.end_kernel_read:
+    jmp KERNEL_MEMORY_LOCATION ; Jump to the kernel offset
 
 load_sector: ; LBA stored in DI, Destination stored in BX, Sector read count stored in AX
     push bx
@@ -233,20 +238,15 @@ print_string:
     ret
 
 debug:
+    push bx
     mov bx, debug_string
     call print_string
+    pop bx
     jmp $
 
 kernel_file: db "KERNEL  BIN"
 kernel_file_len: db $ - kernel_file
 kernel_file_loc: dw 0
-
-DiskAddressPacket:
-.size: db 0x10
-.unused: db 0
-.sector_count: dw 14
-.destination: dd 0x7c00
-.lba_position: dq 13
 
 FAT12_INFO:
 .fat_location: dw 0

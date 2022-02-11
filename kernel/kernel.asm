@@ -1,4 +1,5 @@
-    mov dx, 10
-    mov ax, 20
-    mov es, dx
-    times 1024 db 0xff
+    mov ah, 0xe
+    mov al, 'D'
+    mov bl, 1
+    int 0x10
+    jmp $
