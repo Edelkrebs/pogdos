@@ -9,7 +9,7 @@ image: all
 
 all: $(TARGET)
 
-$(TARGET): clean $(OBJ)
+$(TARGET): clean assemble
 	dd if=/dev/zero bs=512 count=2880 of=$(TARGET)
 	mkfs.msdos $(TARGET)
 	dd if=boot/boot.o of=$(TARGET) bs=512 count=1 conv=notrunc
@@ -20,8 +20,9 @@ $(TARGET): clean $(OBJ)
 	sudo umount mountdir
 	rmdir mountdir
 
-%.o:%.asm
-	nasm -fbin $< -o $@
+assemble: 
+	nasm -f bin boot/boot.asm -o boot/boot.o
+	nasm -f bin kernel/kernel.asm -o kernel/kernel.o
 
 clean:
 	rm -rf $(TARGET) $(OBJ) 

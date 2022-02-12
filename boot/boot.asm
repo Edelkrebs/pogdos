@@ -2,7 +2,6 @@ org 0x7c00
 
 BITS 16
 
-
 section .boot
     jmp short 0x3e
     nop
@@ -37,6 +36,7 @@ KERNEL_MEMORY_LOCATION equ 0x600
 
 start:
     mov byte [BPB.drive_number], dl
+    mov byte [BOOT_INFO.drive_number], dl
 
     mov ax, 0
     mov bx, ax
@@ -168,6 +168,7 @@ load_kernel:
     jmp .find_next_cluster
 
 .end_kernel_read:
+    mov bx, BOOT_INFO
     jmp KERNEL_MEMORY_LOCATION ; Jump to the kernel offset
 
 load_sector: ; LBA stored in DI, Destination stored in BX, Sector read count stored in AX
@@ -222,7 +223,6 @@ debug_string: db "debug", 0
 print_string:
     pusha
     mov ah, 0x0e
-
 .loop:
     mov al, [bx]
     mov cx, bx
@@ -253,6 +253,9 @@ FAT12_INFO:
 .root_dir_location: dw 0
 .root_dir_size: dw 0
 .data_location: dw 0
+
+BOOT_INFO:
+.drive_number db 0
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
