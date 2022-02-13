@@ -15,7 +15,6 @@ _start:
     call print_string
 
     call floppy_driver_init
-    call reset_fdc
 
     mov ebx, done
     call print_string
