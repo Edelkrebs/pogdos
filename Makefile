@@ -3,7 +3,7 @@ ASMFILES := $(shell find -type f -name '*.asm')
 OBJ := $(ASMFILES:.asm=.o)
 
 run: image
-	qemu-system-i386 -no-reboot -no-shutdown -monitor stdio -fda $(TARGET)
+	qemu-system-i386 -M q35 -no-reboot -no-shutdown -d int -monitor stdio -fda $(TARGET)
 
 image: all
 
