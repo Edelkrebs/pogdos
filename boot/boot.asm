@@ -32,7 +32,7 @@ DOS_FILE_NAME_OFFSET equ 0
 DOS_FILE_EXTENSION_OFFSET equ 0x8
 FILE_ATTRIBUTES_OFFSET equ 0xb
 FIRST_CLUSTER_OFFSET equ 0x1a
-KERNEL_MEMORY_LOCATION equ 0x600
+KERNEL_MEMORY_LOCATION equ 0x800
 
 start:
     mov byte [BPB.drive_number], dl
@@ -42,17 +42,16 @@ start:
     mov bx, ax
     mov cx, ax
     mov dx, ax
-    mov sp, ax
-    mov bp, ax
-    
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
-
-    mov ax, 0x500
     mov ss, ax
 
+    mov ax, 0x800
+    mov sp, ax
+    mov bp, ax
+    
     ;Calculate essential fat12 info
     mov ax, [BPB.reserved_sectors]
     mov word [FAT12_INFO.fat_location], ax ;LBA address for FAT(1 in this case)
@@ -114,7 +113,7 @@ load_kernel:
     mov di, [BPB.reserved_sectors]
     call load_sector
 
-.load_kernel_clusters: ; Kernel will be loaded at address starting from 0x600
+.load_kernel_clusters: ; Kernel will be loaded at address starting from 0x800, leaving 0x300 bytes for the stack
     mov bx, [kernel_file_loc]
     add bx, FIRST_CLUSTER_OFFSET
     mov ax, [bx] ; Load ax with the first cluster in the FAT of the kernel file 

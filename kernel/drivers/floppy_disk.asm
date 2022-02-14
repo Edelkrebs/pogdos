@@ -42,8 +42,8 @@ DRIVE_TYPE_1MBPS equ 3
 %include "kernel/util/cpu_util.asm"
 
 floppy_driver_init:
-    push ebp
-    mov ebp, esp
+    push bp
+    mov bp, sp
 
     mov cl, 0x4
     mov ax, 6
@@ -77,21 +77,29 @@ floppy_driver_init:
     out dx, al
 
 .reinitialize_fdc:
+    mov ch, 0 ; The Version command requires no operand bytes.
     mov cl, FDCCMD_VERSION
     call send_floppy_command
 
-    mov esp, ebp
-    pop ebp
+    mov sp, bp
+    pop bp
     ret
 
-send_floppy_command: ; Command in CL
-    push ebp
-    mov ebp, esp
+send_floppy_command: ; Command in CL, number of operand bytes in CH, operand bytes on the stack(bytes have to be pushed last to first)
+    push bp
+    mov bp, sp
 
 .retry_floppy_command:
-    mov ch, 0
-    mov si, cx ; Save original command
+    mov si, cx ; Save original command 
+    mov di, cx ; Save original operand byte count
+    and si, 0xFF
+    shr di, 0x8
     
+    mov ax, 2
+    mul ch
+    mov ch, al 
+    add ch, 0x4 ; Get the offset on the stack for the first operand byte
+
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
 
@@ -108,10 +116,21 @@ send_floppy_command: ; Command in CL
     mov al, cl
     out dx, al
 
+    mov bl, di ; Counter
 .loop_until_command_phase_over:
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
     mov cl, al
+
+    push ax
+    push bp
+    mov dx, FLOPPY_DATA_FIFO
+    add bp, ch ; Add 
+    mov al, [bp]
+    out dx, al 
+    pop bp ; Preserve the bp between the operand byte writes, since the stack offset will be loaded with bp TODO: Optimize so that bp will be preserved outside of this loop to not do stack operations this often, since its unnecessary
+    pop ax ; Preserve ax between the operand byte writes
+    ; TODO: put this somehow after the checks for DIO and RQM, since if we have 0 operand bytes this will not produce valid outputs.
 
     mov dl, al
 
@@ -171,19 +190,19 @@ send_floppy_command: ; Command in CL
     mov bx, debug
     call print_string
 
-    mov esp, ebp
-    pop ebp
+    mov sp, bp
+    pop bp
     ret
 .reset_procedure:
     call reset_fdc
 
-    mov esp, ebp
-    pop ebp
+    mov sp, bp
+    pop bp
     ret
 
 reset_fdc:
-    push ebp
-    mov ebp, esp
+    push bp
+    mov bp, sp
 
 
     mov al, 0x80
@@ -192,8 +211,8 @@ reset_fdc:
     cli
     hlt
 
-    mov esp, ebp
-    pop ebp
+    mov sp, bp
+    pop bp
     ret
 
 floppy_irq6_handler:

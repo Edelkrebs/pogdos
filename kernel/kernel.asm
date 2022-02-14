@@ -1,4 +1,4 @@
-ORG 0x600
+ORG 0x800
 
 BITS 16
 
@@ -24,6 +24,7 @@ _start:
 %include "kernel/drivers/floppy_disk.asm"
 %include "kernel/util/debug_util.asm"
 %include "kernel/system/sys_info.asm"
+
 
 done: db "done", 0
 
