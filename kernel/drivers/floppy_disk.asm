@@ -77,23 +77,21 @@ floppy_driver_init:
     out dx, al
 
 .reinitialize_fdc:
-    mov ch, 0 ; The Version command requires no operand bytes.
-    mov cl, FDCCMD_VERSION
+    push 0x1 ; Test operand byte
+    mov di, 0x9000
+    mov cl, FDCCMD_RECALIBRATE
     call send_floppy_command
 
     mov sp, bp
     pop bp
     ret
 
-send_floppy_command: ; Command in CL, number of operand bytes in CH, operand bytes on the stack(bytes have to be pushed last to first)
+send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, operand bytes on the stack(bytes have to be pushed in reverse order), DMA will not be supported as long as compatability with QEMU is important, maybe there will be a DMA version of this for non-QEMU VMs in the future
     push bp
     mov bp, sp
 
 .retry_floppy_command:
-    mov si, cx ; Save original command 
-    mov di, cx ; Save original operand byte count
-    and si, 0xFF
-    shr di, 0x8
+    mov si, cx ; Save original command
     
     mov ax, 2
     mul ch
@@ -116,48 +114,68 @@ send_floppy_command: ; Command in CL, number of operand bytes in CH, operand byt
     mov al, cl
     out dx, al
 
-    mov bl, di ; Counter
-.loop_until_command_phase_over:
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
-    mov cl, al
+    and al, 0x10
+    test al, al
+    jz .post_command_phase ; If BSY flag is set before the first operand byte is sent, there is no command phase, so we can go on to skip it, but not straight into execution phase, since we dont know if the command has one
 
-    push ax
+
+    mov bx, 0 ; Counter
+.loop_until_command_phase_over:
     push bp
+    push bx 
+    push ax
+
+    mov ax, bx
+    mov bl, 0x2
+    mul bl
+    add ax, 0x4
+    add bp, ax
+    mov ax, [bp]
     mov dx, FLOPPY_DATA_FIFO
-    add bp, ch ; Add 
-    mov al, [bp]
-    out dx, al 
-    pop bp ; Preserve the bp between the operand byte writes, since the stack offset will be loaded with bp TODO: Optimize so that bp will be preserved outside of this loop to not do stack operations this often, since its unnecessary
-    pop ax ; Preserve ax between the operand byte writes
-    ; TODO: put this somehow after the checks for DIO and RQM, since if we have 0 operand bytes this will not produce valid outputs.
+    out dx, al ; Immediate problem: Printing code doesnt work after this
+    hlt
+    jmp $
 
+
+    pop ax
+    pop bx
+    inc bx
+    pop bp ; TODO for some reason it will only loop once, if at all even
+
+    mov dx, FLOPPY_MAIN_STATUS_REGISTER
+    in al, dx
     mov dl, al
-
     and al, 0x80
     test al, al
-    jz .loop_until_command_phase_over
-    and cl, 0x40
-    test cl, cl
-    jz .loop_until_command_phase_over ; If the DIO bit is 1, which means we need to read data from the FIFO IO port, the command phase is over, and we need to go into the execution phase
+    jz .reset_procedure ; If the RMQ bit is 0, something went wrong and we restart the controller.
+    and dl, 0x40
+    test dl, dl
+    jnz .post_command_phase ; If the DIO bit is 1, which means we need to read data from the FIFO IO port, the command phase is over, and we need to go past the command phase
 
+    jmp .loop_until_command_phase_over ; TODO: Remove unnecessary checks for conditions that dont exist
+
+.post_command_phase:
+    jmp $
     ; Outside of the main command phase loop, wont be reached in command phase
     and dl, 0x20
     test dl, dl
     jz .wait_for_result_phase ; If the NDMA bit is not set, the command has no execution phase, so we skip the execution phase
 
 .loop_until_execution_phase_over:
+    jmp $
 
     ; TODO tidy up code and implement support for execution phase commands and figure out operand byte passing into the function
 
-.wait_for_result_phase:
+.wait_for_result_phase: ; TODO: This section may be unnecessary
     ; Wait for MSR.RQM = 1, MSR.DIO = 1
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
 
     and al, 0xc0
     cmp al, 0xc0
-    jne .wait_for_result_phase ; Verify that MSR.RQM and MSR.DIO are both 1
+    jne .wait_for_result_phase ; Verify that MSR.RQM and MSR.DIO are both 1 
 
 .loop_until_result_phase_over:
     ; TODO implement a parameter in the function that the user has to specify which holds a memory location for the result bytes to be stored, for now theres just one, since I am only doing the version command, but in the future there wil be more

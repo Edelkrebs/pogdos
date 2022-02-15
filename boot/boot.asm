@@ -210,7 +210,7 @@ load_sector: ; LBA stored in DI, Destination stored in BX, Sector read count sto
 
     int 0x13
 
-    jc .error
+    jc .error ; TODO: comment this better
     ret 
 .error:
     mov bx, error_string
