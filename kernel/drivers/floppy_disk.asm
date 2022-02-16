@@ -52,9 +52,9 @@ floppy_driver_init:
     add ax, 0x20
 
     mov bx, ax
-    mov word [bx], 0x0
+    mov word [bx + 2], 0x0
     add bx, 0x2
-    mov word [bx + 2], floppy_irq6_handler ; Set the IVT entry for the IRQ6 to the OS' own handler
+    mov word [bx], floppy_irq6_handler ; Set the IVT entry for the IRQ6 to the OS' own handler
     
 ; Set the low 2 bits of the CCR and the DSR according to the master floppy drive(since this OS is gonna mainly read from this one, slave floppy support may be coming later on)
 ; Floppy types besides 1.44 or 1.2 MB floppies are not supported
@@ -79,7 +79,7 @@ floppy_driver_init:
 .reinitialize_fdc:
     push 0x1 ; Test operand byte
     mov di, 0x9000
-    mov cl, FDCCMD_RECALIBRATE
+    mov cl, FDCCMD_VERSION ; CURRENTLY DOING: First supporting the commands without operands, then do the ones with them.
     call send_floppy_command
 
     mov sp, bp
@@ -100,19 +100,20 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
 
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
+    mov dl, al
 
-    mov bl, al
-    and al, 0x80
-    test al, al
-    jz .reset_procedure ; If the RMQ bit(Its ok to send bytes to the FIFO buffer) is not set, then restart the FDC
-    
-    and bl, 0x40
-    test bl, bl 
-    jnz .reset_procedure ; If the DIO bit(The FIFO buffer expects a opcode) is set, then restart the FDC
+    and al, 0xC0
+    cmp al, 0x80
+    jne .reset_procedure
 
     mov dx, FLOPPY_DATA_FIFO
     mov al, cl
-    out dx, al
+    out dx, al ; After each write RQM is set to 0 by the FDC
+
+.wait_for_rqm: ; So we wait for it to be 1 again
+    and dl, 0x80
+    test dl, dl
+    jz .wait_for_rqm
 
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
@@ -120,51 +121,33 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     test al, al
     jz .post_command_phase ; If BSY flag is set before the first operand byte is sent, there is no command phase, so we can go on to skip it, but not straight into execution phase, since we dont know if the command has one
 
-
-    mov bx, 0 ; Counter
 .loop_until_command_phase_over:
-    push bp
-    push bx 
-    push ax
-
-    mov ax, bx
-    mov bl, 0x2
-    mul bl
-    add ax, 0x4
-    add bp, ax
-    mov ax, [bp]
-    mov dx, FLOPPY_DATA_FIFO
-    out dx, al ; Immediate problem: Printing code doesnt work after this
-    hlt
-    jmp $
-
-
-    pop ax
-    pop bx
-    inc bx
-    pop bp ; TODO for some reason it will only loop once, if at all even
 
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
-    mov dl, al
-    and al, 0x80
-    test al, al
-    jz .reset_procedure ; If the RMQ bit is 0, something went wrong and we restart the controller.
-    and dl, 0x40
-    test dl, dl
-    jnz .post_command_phase ; If the DIO bit is 1, which means we need to read data from the FIFO IO port, the command phase is over, and we need to go past the command phase
+    and al, 0xc0
+    cmp al, 0x80
+    jne .post_command_phase ; If the DIO bit is 1, which means we need to read data from the FIFO IO port, the command phase is over, and we need to go past the command phase
 
+    mov bx, debug
+    call print_string
+
+    mov al, 0x1
+    mov dx, FLOPPY_DATA_FIFO
+    out dx, al
+
+    mov dx, FLOPPY_MAIN_STATUS_REGISTER ; TODO: try to actually understand the command operand byte layout a bit more
+    in al, dx
+ 
     jmp .loop_until_command_phase_over ; TODO: Remove unnecessary checks for conditions that dont exist
 
 .post_command_phase:
-    jmp $
     ; Outside of the main command phase loop, wont be reached in command phase
     and dl, 0x20
     test dl, dl
     jz .wait_for_result_phase ; If the NDMA bit is not set, the command has no execution phase, so we skip the execution phase
 
 .loop_until_execution_phase_over:
-    jmp $
 
     ; TODO tidy up code and implement support for execution phase commands and figure out operand byte passing into the function
 
@@ -177,22 +160,23 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     cmp al, 0xc0
     jne .wait_for_result_phase ; Verify that MSR.RQM and MSR.DIO are both 1 
 
+    mov bx, 0x9000 ; Destination address
 .loop_until_result_phase_over:
-    ; TODO implement a parameter in the function that the user has to specify which holds a memory location for the result bytes to be stored, for now theres just one, since I am only doing the version command, but in the future there wil be more
     ; Either waiting for a irq6, which there is no support for yet, or just read result bytes from FIFO, as long as RQM = 1, CMD BSY = 1, DIO = 1
-    
+    mov dx, FLOPPY_MAIN_STATUS_REGISTER
+    in al, dx
+
     mov dx, FLOPPY_DATA_FIFO
     in al, dx
-    mov bl, al ; Store al temporarily, since only doing version command with one output byte(0x90)
-    
+    mov byte [bx], al
+
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
     and al, 0xD0
     cmp al, 0xD0
     jne .command_finished
+    inc bx
     jmp .loop_until_result_phase_over
-
-    mov dx, FLOPPY_MAIN_STATUS_REGISTER
 
 .command_finished:
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
@@ -205,8 +189,6 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     jmp .retry_floppy_command ; If the RQM BSY or DIO flag are still set or not accordingly set after the command, retry it. (TODO: Which I should probably handle differently and check for each individual bit to be in the right state to have a accurate representation of the execution phase has ended or not and if the command was successful or not)
 
 .command_success:
-    mov bx, debug
-    call print_string
 
     mov sp, bp
     pop bp
@@ -238,6 +220,7 @@ floppy_irq6_handler:
     call print_string
     iret
 
+done_with_command_phase: db "Done with command phase!", 0
 debug: db "poggers", 0
 irq6_debug_string: db "IRQ 6 triggered.", 0
 unsupported_floppy_drive_error_string: db "Unsupported floppy drive used to boot this operating system.", 0
