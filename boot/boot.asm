@@ -51,7 +51,12 @@ start:
     mov ax, 0x800
     mov sp, ax
     mov bp, ax
-    
+
+    push bx
+    mov bx, boot_phase
+    call print_string
+    pop bx
+
     ;Calculate essential fat12 info
     mov ax, [BPB.reserved_sectors]
     mov word [FAT12_INFO.fat_location], ax ;LBA address for FAT(1 in this case)
@@ -218,6 +223,7 @@ load_sector: ; LBA stored in DI, Destination stored in BX, Sector read count sto
     jmp $
 error_string: db "error", 0
 debug_string: db "debug", 0
+boot_phase: db "Entering boot phase", 0
 
 print_string:
     pusha

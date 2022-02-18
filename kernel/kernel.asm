@@ -5,7 +5,7 @@ BITS 16
 section .kernel
 
 _start:
-    sei
+    cli
     call sys_info_init
 
     mov bx, kernel_greet_string
@@ -14,17 +14,20 @@ _start:
     mov bx, kernel_version_string
     call print_string
 
-    call floppy_driver_init
+    mov bl, 0x14 ; Map the Master pic to offset 0x8
+    mov bh, 0x1c ; Map the slave pic to offset 0x70
+    call pic_driver_init
+    jmp $
+    ;call floppy_driver_init
 
-    mov ebx, done
+    mov bx, done
     call print_string
 
-    jmp $
 
 %include "kernel/drivers/floppy_disk.asm"
 %include "kernel/util/debug_util.asm"
 %include "kernel/system/sys_info.asm"
-
+%include "kernel/drivers/pic.asm"
 
 done: db "done", 0
 

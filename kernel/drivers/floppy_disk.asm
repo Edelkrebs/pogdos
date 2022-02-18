@@ -45,13 +45,7 @@ floppy_driver_init:
     push bp
     mov bp, sp
 
-    mov cl, 0x4
-    mov ax, 6
-    mul cl
-
-    add ax, 0x20
-
-    mov bx, ax
+    mov bx, 0x38
     mov word [bx + 2], 0x0
     add bx, 0x2
     mov word [bx], floppy_irq6_handler ; Set the IVT entry for the IRQ6 to the OS' own handler
@@ -81,7 +75,7 @@ floppy_driver_init:
     push 0xb01000000 ; Test operand byte
     push 0x0 ; Test operand byte
     mov di, 0x9000
-    mov cl, FDCCMD_VERSION ; CURRENTLY DOING: First supporting the commands without operands, then do the ones with them.
+    mov cl, FDCCMD_SEEK ; CURRENTLY DOING: First supporting the commands without operands, then do the ones with them.
     call send_floppy_command
 
     mov sp, bp
