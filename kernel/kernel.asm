@@ -5,7 +5,8 @@ BITS 16
 section .kernel
 
 _start:
-    cli
+    sti
+
     call sys_info_init
 
     mov bx, kernel_greet_string
@@ -14,14 +15,16 @@ _start:
     mov bx, kernel_version_string
     call print_string
 
-    mov bl, 0x14 ; Map the Master pic to offset 0x8
-    mov bh, 0x1c ; Map the slave pic to offset 0x70
+    mov bl, 0x8 ; Map the Master pic to offset 0x8
+    mov bh, 0x70 ; Map the slave pic to offset 0x70
     call pic_driver_init
-    jmp $
-    ;call floppy_driver_init
+
+    call floppy_driver_init
 
     mov bx, done
     call print_string
+
+    jmp $
 
 
 %include "kernel/drivers/floppy_disk.asm"

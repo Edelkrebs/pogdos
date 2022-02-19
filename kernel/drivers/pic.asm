@@ -15,6 +15,7 @@ pic_driver_init: ; BL = Vector offset master, BH = master offset slave
     mov bp, sp
     push ax
     push cx
+
     cli
 
     in al, MASTER_PIC_DATA ; Get the current masking status of the master pic
@@ -49,10 +50,8 @@ pic_driver_init: ; BL = Vector offset master, BH = master offset slave
     call io_wait
 
     mov al, cl
-    mov al, 0xFF
     out MASTER_PIC_DATA, al ; Restore masks
     mov al, ch
-    mov al, 0xFF
     out SLAVE_PIC_DATA, al ; Restore masks
 
     sti
@@ -60,7 +59,7 @@ pic_driver_init: ; BL = Vector offset master, BH = master offset slave
     pop cx
     pop ax
     mov sp, bp
-    push bp
+    pop bp
     ret
 
 pic_eoi: ; AL stores the IRQ
