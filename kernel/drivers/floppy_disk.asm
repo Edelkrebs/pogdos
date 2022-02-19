@@ -47,7 +47,6 @@ floppy_driver_init:
 
     mov bx, 0x38
     mov word [bx + 2], 0x0
-    add bx, 0x2
     mov word [bx], floppy_irq6_handler ; Set the IVT entry for the IRQ6 to the OS' own handler
     
 ; Set the low 2 bits of the CCR and the DSR according to the master floppy drive(since this OS is gonna mainly read from this one, slave floppy support may be coming later on)
@@ -74,8 +73,8 @@ floppy_driver_init:
     push 0x0 ; Test operand byte
     push 0xb01000000 ; Test operand byte
     push 0x0 ; Test operand byte
-    mov di, 0x9000
-    mov cl, FDCCMD_SEEK ; CURRENTLY DOING: First supporting the commands without operands, then do the ones with them.
+    mov di, 0x9000 ; TODO replace this with a variable
+    mov cl, FDCCMD_VERSION 
     call send_floppy_command
 
     mov sp, bp
@@ -114,48 +113,46 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     test dl, dl
     jz .wait_for_rqm
 
-.loop_until_command_phase_over:
+    mov cx, 4; Counter
+.send_command_bytes_loop:
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
-    and al, 0xD0 ; First we get the state of the RMQ, DIO and BSY bit
-    cmp al, 0x90 ; If the RMQ bit is set, the DIO is not, and the BSY is, then do nothing, but if something is off,
-    jne .post_command_phase ; skip the command phase, since if the BSY bit, which will probably be the case more than RMQ not being set, is set, then the command bytes have all been sent
+    mov ah, al
+    and al, 0x10 
+    test al, al 
+    jz .command_finished ; If the BSY bit is not set, the command got no result phase, so the command is done after the last command byte has been sent 
+    mov al, ah
+    and al, 0xc0
+    cmp al, 0x80
+    jne .post_command_byte_stage ; If the DIO bit is set or the RMQ bit is not set,  
+    ; TODO maybe try to differenciate between command and execution phase and actually get whats going on
 
-    mov dx, FLOPPY_MAIN_STATUS_REGISTER
-    in al, dx
+    mov bx, bp
+    add bx, cx
+    mov ax, [bx]
+    mov dx, FLOPPY_DATA_FIFO
+    out dx, al 
+    add cx, 2
+
+    xor bx, bx
     mov bl, al
     call print_byte_debug
+    
+    jmp .send_command_bytes_loop 
 
-    mov al, 0x0
-    mov dx, FLOPPY_DATA_FIFO
-    out dx, al ; TODO: Get the operand bytes from the stack instead of just debug 0x0 value
-
-    jmp .loop_until_command_phase_over ; TODO: Remove unnecessary checks for conditions that dont exist
-
-.post_command_phase:
-    ; Outside of the main command phase loop, wont be reached in command phase
+.post_command_byte_stage:
     mov bx, done_with_command_phase
     call print_string
 
-    and dl, 0x20
-    test dl, dl
-    jz .wait_for_result_phase ; If the NDMA bit is not set, the command has no execution phase, so we skip the execution phase
-
-.loop_until_execution_phase_over:
-
-    ; TODO: do command phase related stuff and IRQ 6 stuff
-    ; TODO tidy up code and implement support for execution phase commands and figure out operand byte passing into the function
-
-.wait_for_result_phase: ; TODO: This section may be unnecessary
-    ; Wait for MSR.RQM = 1, MSR.DIO = 1
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
+    and al, 0x20
+    test al, al
+    jz .result_phase ; Wait for NDMA to be 0, so that the execution phase is over and we can go into the result phase
+    jmp .post_command_byte_stage
 
-    and al, 0xc0
-    cmp al, 0xc0
-    jne .wait_for_result_phase ; Verify that MSR.RQM and MSR.DIO are both 1 
-
-    mov bx, 0x9000 ; Destination address
+.result_phase:
+    mov bx, di
 .loop_until_result_phase_over:
     ; Either waiting for a irq6, which there is no support for yet, or just read result bytes from FIFO, as long as RQM = 1, CMD BSY = 1, DIO = 1
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
@@ -164,6 +161,7 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     mov dx, FLOPPY_DATA_FIFO
     in al, dx
     mov byte [bx], al
+    jmp $
 
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
@@ -171,7 +169,7 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     cmp al, 0xD0
     jne .command_finished
     inc bx
-    jmp .loop_until_result_phase_over
+    jmp .loop_until_result_phase_over ; TODO tidy up these bit flag checks
 
 .command_finished:
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
