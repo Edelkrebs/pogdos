@@ -40,6 +40,10 @@ DRIVE_TYPE_1MBPS equ 3
 
 %include "kernel/system/sys_info.asm"
 %include "kernel/util/cpu_util.asm"
+ 
+;
+; TODO: Implement a PIT driver to handle actual delays more precisely.
+;
 
 floppy_driver_init:
     push bp
@@ -49,37 +53,37 @@ floppy_driver_init:
     mov word [bx + 2], 0x0
     mov word [bx], floppy_irq6_handler ; Set the IVT entry for the IRQ6 to the OS' own handler
     
-; Set the low 2 bits of the CCR and the DSR according to the master floppy drive(since this OS is gonna mainly read from this one, slave floppy support may be coming later on)
-; Floppy types besides 1.44 or 1.2 MB floppies are not supported
-.set_ccr_and_dsr:
-    mov al, [SYSINFO.master_floppy]
-    cmp al, FLOPPY_1_44_MB
-    je .type_500kbps
-    cmp al, FLOPPY_1_2_MB
-    je .type_500kbps
-
-    mov bx, unsupported_floppy_drive_error_string
-    call print_string
-
-.type_500kbps:
-    mov al, DRIVE_TYPE_500KBPS
-    and al, 0x3
-    mov dx, FLOPPY_CONFIGURATION_CONTROL_REGISTER
-    out dx, al
-    mov dx, FLOPPY_DATARATE_SELECT_REGISTER
-    out dx, al
-
 .reinitialize_fdc:
-    push 0x0 ; Test operand byte
-    push 0xb01000000 ; Test operand byte
-    push 0x0 ; Test operand byte
-    mov di, 0x9000 ; TODO replace this with a variable
+    mov di, version_byte 
     mov cl, FDCCMD_VERSION 
     call send_floppy_command
+    mov al, [version_byte]
+
+    cmp al, 0x90
+    jne .wrong_fdc_version
+
+    mov di, 0
+    mov cl, FDCCMD_CONFIGURE
+    push 0x0
+    push 0b01011000
+    push 0x0
+    call send_floppy_command
+
+    mov cl, FDCCMD_LOCK
+    mov di, lock_bit
+    call send_floppy_command
+
+    call reset_fdc
+
+    jmp $
 
     mov sp, bp
     pop bp
     ret
+.wrong_fdc_version:
+    mov bx, version_error_string
+    call print_string
+    jmp $
 
 send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, operand bytes on the stack(bytes have to be pushed in reverse order), DMA will not be supported as long as compatability with QEMU is important, maybe there will be a DMA version of this for non-QEMU VMs in the future
     push bp
@@ -126,6 +130,7 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     cmp al, 0x80
     jne .post_command_byte_stage ; If the DIO bit is set or the RMQ bit is not set,  
     ; TODO maybe try to differenciate between command and execution phase and actually get whats going on
+    ; TODO do the above and handle IRQ6s role in sending bytes to the FIFO buffer
 
     mov bx, bp
     add bx, cx
@@ -157,21 +162,21 @@ send_floppy_command: ; Command in CL, Destination of the operand bytes in DI, op
     ; Either waiting for a irq6, which there is no support for yet, or just read result bytes from FIFO, as long as RQM = 1, CMD BSY = 1, DIO = 1
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
-
-    mov dx, FLOPPY_DATA_FIFO
-    in al, dx
-    mov byte [bx], al
-    jmp $
-
-    mov dx, FLOPPY_MAIN_STATUS_REGISTER
-    in al, dx
     and al, 0xD0
     cmp al, 0xD0
     jne .command_finished
+    
+    mov dx, FLOPPY_DATA_FIFO
+    in al, dx
+    mov byte [bx], al
+
     inc bx
     jmp .loop_until_result_phase_over ; TODO tidy up these bit flag checks
 
 .command_finished:
+    mov bx, command_finished_string
+    call print_string
+
     mov dx, FLOPPY_MAIN_STATUS_REGISTER
     in al, dx
 
@@ -197,25 +202,108 @@ reset_fdc:
     push bp
     mov bp, sp
 
-    mov al, 0x80
-    int 0x0
-    out FLOPPY_DATARATE_SELECT_REGISTER, al
-    cli
-    hlt
+    mov dx, FLOPPY_DIGITAL_OUTPUT_REGISTER
+    in al, dx
+    mov ah, al
+
+    mov al, 0
+    out dx, al
+
+    call io_wait
+
+    mov byte [irq_triggered_bool], 0
+
+    mov al, ah
+    or al, 0x4
+    out dx, al
+
+    call wait_for_irq6 ; Wait for the impending interrupt after setting the reset bit in the DOR
+
+    ; Set the low 2 bits of the CCR and the DSR according to the master floppy drive(since this OS is gonna mainly read from this one, slave floppy support may be coming later on)
+    ; Floppy types besides 1.44 or 1.2 MB floppies are not supported
+.set_ccr_and_dsr:
+    mov al, [SYSINFO.master_floppy]
+    cmp al, FLOPPY_1_44_MB
+    je .type_500kbps
+    cmp al, FLOPPY_1_2_MB
+    je .type_500kbps
+
+    mov bx, unsupported_floppy_drive_error_string
+    call print_string
+    jmp $
+
+.type_500kbps:
+    mov al, DRIVE_TYPE_500KBPS
+    and al, 0x3
+    mov dx, FLOPPY_CONFIGURATION_CONTROL_REGISTER
+    out dx, al
+    mov dx, FLOPPY_DATARATE_SELECT_REGISTER
+    out dx, al
+
+    ; This command is probably unnecessary but who cares
+    mov cl, FDCCMD_SPECIFY
+    mov ax, 5 << 1 | 1 ; Second parameter bit for the specify command (HLT value of 5 and NDMA set for PIO mode)
+    push ax
+    mov ax, (8 << 4) & 0xF0 ; First parameter bit for the specify command (SRT value of 8 and HUT value of 0)
+    mov di, 0
+    call send_floppy_command
+
+    mov bx, [SYSINFO.boot_info_address]
+    mov dx, FLOPPY_DIGITAL_OUTPUT_REGISTER
+    mov cl, byte [bx] ; Load al with the drive number out of the boot info block
+    mov dl, cl
+
+    mov ah, 0
+    mov al, 1
+    shl al, 4
+    shl ax, cl
+    or al, 0x4 ; Set the bit to activate the motor of the current master floppy drive for the recalibrate command to work
+
+    out dx, al ; Select the boot drive number in the DIGITAL OUTPUT REGISTER 
+
+    ; Since we only support one floppy drive, the master one, we only send one recalibrate command to the master floppy, maybe a quick todo would be to support the slave floppy too, but that is not a high priority right now
+    xor ax, ax
+    mov al, dl
+    push ax
+    mov cl, FDCCMD_RECALIBRATE
+    mov di, 0
+    mov byte [irq_triggered_bool], 0
+    call send_floppy_command ; TODO restart bit not cleared in DOR and Recalibrate not doing a IRQ6
+
+    mov dx, FLOPPY_DIGITAL_OUTPUT_REGISTER
+    in al, dx
+    jmp $
+
+    call wait_for_irq6 ; Wait for the irq 6 after sending the recalibrate command
 
     mov sp, bp
     pop bp
     ret
 
 floppy_irq6_handler:
+    mov byte [irq_triggered_bool], 0x1
+
     mov bx, irq6_debug_string
     call print_string
     iret
 
+wait_for_irq6:
+    mov al, byte [irq_triggered_bool]
+    cmp al, 1
+    jne wait_for_irq6
+
+    mov byte [irq_triggered_bool], 0
+    ret
+
 done_with_command_phase: db "Done with command phase!", 0
+command_finished_string: db "Command success!", 0
 debug: db "poggers", 0
 irq6_debug_string: db "IRQ 6 triggered.", 0
 unsupported_floppy_drive_error_string: db "Unsupported floppy drive used to boot this operating system.", 0
+version_error_string: db "INVALID VERSION COMMAND RESULT", 0
+version_byte: db 0
+lock_bit: db 0
+irq_triggered_bool: db 0
 
 print_byte_debug: ; such bad code satan would be scared if he looked at it 
     pusha
@@ -254,5 +342,6 @@ print_byte_debug: ; such bad code satan would be scared if he looked at it
 .done
     popa
     ret
+
 
 %endif

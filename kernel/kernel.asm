@@ -9,6 +9,9 @@ _start:
 
     call sys_info_init
 
+    mov bx, [SYSINFO.boot_info_address]
+    mov al, byte [bx]
+
     mov bx, kernel_greet_string
     call print_string
 

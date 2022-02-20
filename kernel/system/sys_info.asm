@@ -14,8 +14,8 @@ FLOPPY_2_88_MB equ 0x5
 
 SYSINFO:
 .boot_info_address: resw 1
-.master_floppy:      resb 1
-.slave_floppy:       resb 1  
+.master_floppy:      db 1
+.slave_floppy:       db 1  
 
 sys_info_init:
     push ebp
